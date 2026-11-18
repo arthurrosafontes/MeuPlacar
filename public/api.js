@@ -389,3 +389,24 @@ export const vlrFind = (idx, name) => idx?.get(nrm(name));
 export async function vlrMatch(matchId) {
   try { return await getData(`vlr/match/${matchId}.json`); } catch { return null; }
 }
+
+// ---------- Mata-mata ----------
+export async function bracket(league) {
+  try { return await getData(`bracket/${league.key}.json`); } catch { return null; }
+}
+
+// ---------- Escudos: versão pequena (carrega bem mais rápido) ----------
+// A ESPN tem um redimensionador de imagens; logos de 500px viram ~2 KB.
+export function logoSrc(url, px = 40) {
+  if (!url) return '';
+  const m = String(url).match(/^https?:\/\/a\d?\.espncdn\.com(\/i\/teamlogos\/[^?]+\.png)/i);
+  if (m) return `https://a.espncdn.com/combiner/i?img=${m[1]}&w=${px * 2}&h=${px * 2}&scale=crop&cquality=60`;
+  return url;
+}
+const warmed = new Set();
+export function warmLogos(urls, px = 20) {
+  urls.forEach((u) => {
+    const src = logoSrc(u, px); if (!src || warmed.has(src)) return;
+    warmed.add(src); const im = new Image(); im.decoding = 'async'; im.src = src;
+  });
+}

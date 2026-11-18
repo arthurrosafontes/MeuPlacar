@@ -36,7 +36,13 @@ const fmtTime = (d) => d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: 
 const fmtDateLong = (d) => d.toLocaleDateString('pt-BR', { weekday: 'long', day: '2-digit', month: 'long' });
 const fmtDateShort = (d) => d.toLocaleDateString('pt-BR', { weekday: 'short', day: '2-digit', month: 'short' });
 const leagueByKey = (k) => LEAGUES.find((l) => l.key === k);
-const logoImg = (src, alt = '', cls = '') => (src ? `<img class="${cls}" src="${esc(src)}" alt="" loading="lazy" onerror="this.style.visibility='hidden'">` : `<div class="ph ${cls}">${esc((alt || '?').slice(0, 3))}</div>`);
+const LOGO_PX = { 't-logo': 60, '': 22, mini: 16 };
+const logoImg = (src, alt = '', cls = '', px) => {
+  if (!src) return `<div class="ph ${cls}">${esc((alt || '?').slice(0, 3))}</div>`;
+  const small = api.logoSrc(src, px || LOGO_PX[cls] || 22);
+  const fb = small !== src ? ` data-o="${esc(src)}"` : '';
+  return `<img class="${cls}" src="${esc(small)}"${fb} alt="" decoding="async" onerror="if(this.dataset.o){this.src=this.dataset.o;this.removeAttribute('data-o')}else{this.style.visibility='hidden'}">`;
+};
 
 function toast(msg) {
   const t = $('#toast');
@@ -198,10 +204,29 @@ async function refresh(manual = false) {
     bindView();
   }
   schedulePoll();
+  prefetchNeighbours();
   if (ui.detail) {
     const upd = ui.matches.find((m) => m.uid === ui.detail.match.uid);
     if (upd) { ui.detail.match = upd; renderDetail(); }
   }
+}
+
+// Carrega em segundo plano os dias vizinhos (dados + escudos) para a troca de dia ser instantânea
+let prefetchT;
+const dayCache = new Map();
+function prefetchNeighbours() {
+  clearTimeout(prefetchT);
+  prefetchT = setTimeout(async () => {
+    api.warmLogos(ui.matches.flatMap((m) => [m.home.logo, m.away.logo]));
+    for (const off of [1, -1, 2]) {
+      const d = addDays(ui.day, off);
+      try {
+        const r = await api.loadDay(d, store.enabled, store.tiers);
+        dayCache.set(+d, { t: Date.now(), ...r });
+        api.warmLogos(r.matches.flatMap((m) => [m.home.logo, m.away.logo]));
+      } catch {}
+    }
+  }, 1200);
 }
 
 function schedulePoll() {
@@ -296,7 +321,7 @@ function renderDetail() {
   const center = showScore
     ? `<div class="d-score ${live ? 'live' : ''}">${esc(m.home.score)} - ${esc(m.away.score)}<small>${esc(m.statusText || (live ? 'Ao vivo' : 'Fim'))}</small></div>`
     : `<div class="d-score">${fmtTime(m.start)}<small>${esc(m.statusText || fmtDateShort(m.start))}</small></div>`;
-  const team = (t) => `<div class="d-team"><button class="d-team-link" data-openteam="${esc(t.id)}">${logoImg(t.logo, t.short)}<span>${esc(t.name)}</span></button>${t.id ? `<button class="star ${isFav(m, t) ? 'on' : ''}" data-fav="${esc(t.id)}" aria-label="Favoritar">${isFav(m, t) ? '★' : '☆'}</button>` : ''}</div>`;
+  const team = (t) => `<div class="d-team"><button class="d-team-link" data-openteam="${esc(t.id)}">${logoImg(t.logo, t.short, '', 56)}<span>${esc(t.name)}</span></button>${t.id ? `<button class="star ${isFav(m, t) ? 'on' : ''}" data-fav="${esc(t.id)}" aria-label="Favoritar">${isFav(m, t) ? '★' : '☆'}</button>` : ''}</div>`;
 
   const info = [];
   info.push(`<div>📅 <span><b>${esc(fmtDateLong(m.start))}</b> às <b>${fmtTime(m.start)}</b></span></div>`);
@@ -330,6 +355,10 @@ function renderDetail() {
     toggleFav(m, t); renderDetail(); if (ui.tab === 'jogos') { $('#list').innerHTML = listHTML(); bindView(); }
   }));
   if (d.tab === 'table' && !d.table) loadDetailTable();
+  if (d.tab === 'table' && m.league.cup) {
+    $('#sheet-body').querySelectorAll('[data-tsub]').forEach((b) => b.onclick = () => { d.tsub = b.dataset.tsub; renderDetail(); });
+    if ((d.tsub || 'ko') === 'ko') api.bracket(m.league).then((br) => { const box = $('#ko-box'); if (box && ui.detail === d) renderBracketInto(box, br, m.league, [m.home.id, m.away.id]); });
+  }
   if (d.tab === 'h2h' && !d.h2h) loadH2H();
   if (d.tab === 'vstats' && d.vlr === undefined && !d.vlrLoading) { d.vlrLoading = true; api.vlrMatch(m.id).then((v) => { d.vlr = v; if (ui.detail === d && d.tab === 'vstats') $('#pane').innerHTML = paneHTML(); }); }
 }
@@ -347,7 +376,15 @@ function paneHTML() {
   if (d.tab === 'h2h') return d.h2h ? h2hHTML(d) : '<div class="skeleton"></div><div class="skeleton"></div>';
   if (d.tab === 'resumo') return espnResumoHTML(d);
   if (d.tab === 'lineups') return m.sport === 'football' ? espnLeadersHTML(d) : espnLineupsHTML(d);
-  if (d.tab === 'table') return d.table ? standingsHTML(d.table, [m.home.id, m.away.id], m.league) : '<div class="skeleton"></div>';
+  if (d.tab === 'table') {
+    if (m.league.cup) {
+      const sub = d.tsub || 'ko';
+      const seg = `<div class="tabs" style="margin:0 0 12px"><button data-tsub="ko" class="${sub === 'ko' ? 'active' : ''}">Mata-mata</button><button data-tsub="class" class="${sub === 'class' ? 'active' : ''}">Classificação</button></div>`;
+      if (sub === 'ko') return seg + '<div id="ko-box"><div class="skeleton"></div></div>';
+      return seg + (d.table ? (d.table.length ? standingsHTML(d.table, [m.home.id, m.away.id], m.league) : '<div class="empty"><b>Sem fase de pontos</b></div>') : '<div class="skeleton"></div>');
+    }
+    return d.table ? standingsHTML(d.table, [m.home.id, m.away.id], m.league) : '<div class="skeleton"></div>';
+  }
   return '';
 }
 
@@ -607,7 +644,7 @@ async function loadDetailTable() {
   const d = ui.detail; if (!d || d.table || d.tableLoading) return;
   d.tableLoading = true;
   try { d.table = await api.espnStandings(d.match.league); } catch { d.table = []; }
-  if (ui.detail === d && d.tab === 'table') { $('#pane').innerHTML = paneHTML(); bindMatchLinks($('#pane')); }
+  if (ui.detail === d && d.tab === 'table') { if (d.match.league.cup && (d.tsub || 'ko') === 'ko') return; $('#pane').innerHTML = paneHTML(); bindMatchLinks($('#pane')); }
 }
 
 function psMapsHTML(d) {
@@ -665,9 +702,10 @@ function psStreamsHTML(d) {
 function viewTabelasShell() {
   const opts = LEAGUES.filter((l) => (l.src === 'espn' || l.key === 'valorant') && store.enabled.includes(l.key))
     .map((l) => `<option value="${l.key}" ${store.standingsLeague === l.key ? 'selected' : ''}>${l.flag} ${esc(l.key === 'valorant' ? 'Valorant — melhores jogadores' : l.name)}</option>`).join('');
-  const mode = store.standingsLeague === 'valorant' ? 'lead' : (ui.tblMode || 'class');
+  let mode = store.standingsLeague === 'valorant' ? 'lead' : (ui.tblMode || 'class');
+  if (mode === 'ko' && !leagueByKey(store.standingsLeague)?.cup) mode = 'class';
   return `<h2 class="section-title">Tabelas</h2><div style="margin:0 10px 10px"><select class="input" id="sel-league">${opts}</select></div>
-    ${store.standingsLeague === 'valorant' ? '' : `<div class="tabs"><button data-tmode="class" class="${mode === 'class' ? 'active' : ''}">Classificação</button><button data-tmode="lead" class="${mode === 'lead' ? 'active' : ''}">Artilharia e líderes</button></div>`}
+    ${store.standingsLeague === 'valorant' ? '' : `<div class="tabs"><button data-tmode="class" class="${mode === 'class' ? 'active' : ''}">Classificação</button>${leagueByKey(store.standingsLeague)?.cup ? `<button data-tmode="ko" class="${mode === 'ko' ? 'active' : ''}">Mata-mata</button>` : ''}<button data-tmode="lead" class="${mode === 'lead' ? 'active' : ''}">Artilharia${leagueByKey(store.standingsLeague)?.cup ? '' : ' e líderes'}</button></div>`}
     <div id="stand"><div class="skeleton"></div></div>`;
 }
 
@@ -683,8 +721,15 @@ async function loadStandings() {
     render(); return;
   }
   if (!lg) { el.innerHTML = '<div class="empty"><b>Nenhuma competição ativa</b></div>'; return; }
-  const mode = ui.tblMode || 'class';
+  let mode = ui.tblMode || 'class';
+  if (mode === 'ko' && !lg.cup) mode = 'class';
   try {
+    if (mode === 'ko') {
+      const br = await api.bracket(lg);
+      if (ui.tab !== 'tabelas') return;
+      renderBracketInto(el, br, lg);
+      return;
+    }
     if (mode === 'class') {
       const t = await api.espnStandings(lg);
       if (ui.tab !== 'tabelas') return;
@@ -706,6 +751,71 @@ async function loadStandings() {
 function bindLeaders(el, cats, lg) {
   el.querySelectorAll('[data-cat]').forEach((b) => b.onclick = () => { ui.leadCat = b.dataset.cat; el.innerHTML = leadersHTML(cats, lg); bindLeaders(el, cats, lg); });
   bindMatchLinks(el);
+}
+
+const STAGE_PT = { 'First Stage': '1ª fase', 'Second Stage': '2ª fase', 'Third Stage': '3ª fase', 'First Round': '1ª fase', 'Second Round': '2ª fase', 'Third Round': '3ª fase', 'Fourth Round': '4ª fase', 'Fifth Round': '5ª fase', 'Knockout Round Playoffs': 'Playoffs', 'Playoffs': 'Playoffs', 'Knockout Playoffs': 'Playoffs', 'Round of 32': '16 avos', 'Rd of 32': '16 avos', 'Rd of 16': 'Oitavas', 'Round of 16': 'Oitavas', 'Quarterfinals': 'Quartas', 'Semifinals': 'Semifinal', 'Final': 'Final', 'Third Place': '3º lugar' };
+const stageName = (l) => STAGE_PT[l] || l;
+
+function renderBracketInto(el, br, lg, hl = []) {
+  const stages = (br?.stages || []).filter((s) => s.ko && s.ties.length);
+  if (!stages.length) {
+    const next = (br?.stages || []).find((s) => s.ko && !s.ties.length);
+    el.innerHTML = `<div class="empty"><b>Mata-mata ainda não começou</b>${next ? `Próxima fase: ${esc(stageName(next.label))}${next.detail ? ` (${esc(next.detail)})` : ''}.` : 'O robô monta os confrontos aos poucos (pode levar algumas horas na primeira vez).'}</div>`;
+    return;
+  }
+  // chave: a partir da fase com até 16 confrontos
+  const tree = stages.filter((s) => s.ties.length <= 16);
+  // alinha a chave: cada fase segue a ordem dos confrontos da fase seguinte (de trás para frente)
+  for (let i = tree.length - 2; i >= 0; i--) {
+    const next = tree[i + 1].ties;
+    const pos = (t) => { const w = t.winner || t.teams[0].id; const j = next.findIndex((n) => n.teams.some((x) => x.id === w || t.teams.some((y) => y.id === x.id))); return j < 0 ? 999 : j; };
+    tree[i] = { ...tree[i], ties: tree[i].ties.slice().sort((x, y) => pos(x) - pos(y)) };
+  }
+  let cur = el._stage ?? (tree.length >= 2 ? 'tree' : stages[stages.length - 1].label);
+  const draw = () => {
+    const chips = `<div class="chips" style="padding:0 0 10px">${tree.length >= 2 ? `<button class="chip ${cur === 'tree' ? 'active' : ''}" data-stage="tree">Chave</button>` : ''}${stages.map((s) => `<button class="chip ${cur === s.label ? 'active' : ''}" data-stage="${esc(s.label)}">${esc(stageName(s.label))}</button>`).join('')}</div>`;
+    let body;
+    if (cur === 'tree') {
+      const future = (br.stages || []).filter((s) => s.ko && !s.ties.length && tree.length && (br.stages.indexOf(s) > br.stages.indexOf(tree[tree.length - 1])));
+      body = `<div class="bracket">${tree.map((s) => `<div class="b-col"><div class="b-h">${esc(stageName(s.label))}</div>${s.ties.map((t) => tieMini(t, hl)).join('')}</div>`).join('')}${future.map((s) => `<div class="b-col"><div class="b-h">${esc(stageName(s.label))}</div><div class="b-tie b-tbd">A definir${s.detail ? `<br><small>${esc(s.detail)}</small>` : ''}</div></div>`).join('')}</div>`;
+    } else {
+      const st = stages.find((s) => s.label === cur) || stages[stages.length - 1];
+      body = st.ties.map((t) => tieFull(t, hl)).join('');
+    }
+    el.innerHTML = chips + body + `<p class="hint" style="margin:6px 2px 12px">Toque num confronto para ver o jogo.</p>`;
+    el.querySelectorAll('[data-stage]').forEach((b) => b.onclick = () => { cur = b.dataset.stage; el._stage = cur; draw(); });
+    el.querySelectorAll('[data-leg]').forEach((b) => b.onclick = () => {
+      const all = stages.flatMap((s) => s.ties); const t = all.find((x) => x.legs.some((l) => l.id === b.dataset.leg)); if (!t) return;
+      const leg = t.legs.find((l) => l.id === b.dataset.leg);
+      const side = (id) => { const tm = t.teams.find((x) => x.id === id) || {}; return { id, name: tm.name, short: tm.short || tm.name, logo: tm.logo, score: leg.state === 'pre' ? null : leg.score[id], winner: false }; };
+      const awayId = t.teams.find((x) => x.id !== leg.home)?.id;
+      openDetail({ uid: `espn:${lg.key}:${leg.id}`, id: leg.id, src: 'espn', sport: lg.sport, league: lg, start: new Date(leg.date), state: leg.state, statusText: leg.state === 'post' ? 'Fim' : leg.state === 'in' ? leg.clock : '', home: side(leg.home), away: side(awayId), venue: {}, note: t.note || '' });
+    });
+  };
+  draw();
+}
+
+function tieMini(t, hl) {
+  const last = t.legs[t.legs.length - 1];
+  const row = (tm) => {
+    const w = t.winner === tm.id, l = t.winner && !w;
+    return `<div class="b-team ${w ? 'w' : ''} ${l ? 'l' : ''} ${hl.includes(tm.id) ? 'hl' : ''}">${logoImg(tm.logo, tm.short, 'mini')}<span>${esc(tm.short || tm.name)}</span><b>${t.agg ? esc(t.agg[tm.id]) : ''}${t.pens ? `<small>(${esc(t.pens[tm.id])})</small>` : ''}</b></div>`;
+  };
+  return `<button class="b-tie ${t.live ? 'live' : ''}" data-leg="${esc(last.id)}">${row(t.teams[0])}${row(t.teams[1])}${!t.agg ? `<div class="b-date">${esc(new Date(t.legs[0].date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))}</div>` : ''}</button>`;
+}
+
+function tieFull(t, hl) {
+  const legName = (l, i) => (t.legs.length === 1 ? 'Jogo único' : i === 0 ? 'Ida' : i === 1 ? 'Volta' : `Jogo ${i + 1}`);
+  const head = t.legs.map((l, i) => `<th>${legName(l, i)}</th>`).join('') + (t.legs.length > 1 ? '<th>Agr.</th>' : '') + (t.pens ? '<th>Pên.</th>' : '');
+  const row = (tm) => {
+    const w = t.winner === tm.id;
+    return `<tr class="${w ? 'tw' : t.winner ? 'tl' : ''} ${hl.includes(tm.id) ? 'hl' : ''}"><td class="team"><div>${logoImg(tm.logo, tm.short)}<span>${esc(tm.name)}</span>${w ? '<span class="adv">✓</span>' : ''}</div></td>
+      ${t.legs.map((l) => `<td>${l.state === 'pre' ? '–' : esc(l.score[tm.id] ?? '-')}</td>`).join('')}
+      ${t.legs.length > 1 ? `<td class="pts">${t.agg ? esc(t.agg[tm.id]) : '–'}</td>` : ''}${t.pens ? `<td>${esc(t.pens[tm.id])}</td>` : ''}</tr>`;
+  };
+  const dates = t.legs.map((l, i) => `<button class="b-leg" data-leg="${esc(l.id)}">${legName(l, i)}: ${esc(new Date(l.date).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' }))} ${esc(fmtTime(new Date(l.date)))}${l.state === 'in' ? ' <b style="color:var(--live)">ao vivo</b>' : ''} ›</button>`).join('');
+  return `<div class="card" style="margin:0 0 10px"><table class="standings ktable"><tr><th style="text-align:left">Confronto</th>${head}</tr>${row(t.teams[0])}${row(t.teams[1])}</table>
+    <div class="b-legs">${dates}</div>${t.note ? `<div class="sub" style="padding:0 12px 10px">${esc(t.note)}</div>` : ''}</div>`;
 }
 
 function vlrLeadersHTML(v) {
@@ -856,7 +966,10 @@ async function showTeamResults() {
 function bindView() {
   const v = $('#view');
   v.querySelectorAll('[data-day]').forEach((b) => b.onclick = () => {
-    ui.day = new Date(Number(b.dataset.day)); ui.matches = []; ui.errors = [];
+    ui.day = new Date(Number(b.dataset.day));
+    const pre = dayCache.get(+ui.day);
+    if (pre && Date.now() - pre.t < 10 * 60e3) { ui.matches = pre.matches; ui.errors = pre.errors; $('#list').innerHTML = listHTML(); }
+    else { ui.matches = []; ui.errors = []; }
     v.querySelectorAll('[data-day]').forEach((x) => x.classList.toggle('active', x === b));
     b.scrollIntoView({ inline: 'center', behavior: 'smooth', block: 'nearest' });
     refresh();

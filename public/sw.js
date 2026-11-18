@@ -1,5 +1,5 @@
 // Service worker: app abre offline; dados = rede primeiro, cache como reserva; escudos em cache.
-const VERSION = 'meuplacar-v2';
+const VERSION = 'meuplacar-v3';
 const BASE = new URL('./', self.location).pathname; // ex.: /meuplacar/
 const SHELL = ['', 'index.html', 'styles.css', 'app.js', 'api.js', 'config.js', 'manifest.webmanifest', 'icons/icon-192.png', 'icons/icon-512.png'].map((p) => BASE + p);
 
