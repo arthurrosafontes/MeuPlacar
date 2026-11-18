@@ -38,11 +38,12 @@ async function direct(path) {
     if (directOK !== true) { directOK = true; try { sessionStorage.setItem('mp:direct', '1'); } catch {} }
     return j;
   } catch (e) {
-    if (directOK === null && e.name !== 'AbortError') { directOK = false; try { sessionStorage.setItem('mp:direct', '0'); } catch {} }
+    if (directOK === null && e.name !== 'AbortError' && !/^HTTP /.test(e.message)) { directOK = false; try { sessionStorage.setItem('mp:direct', '0'); } catch {} }
     throw e;
   } finally { clearTimeout(t); }
 }
 export const liveMode = () => directOK === true;
+const singleDay = new Set();
 
 export async function getMeta() {
   try { return await getData('meta.json', { fresh: true }); } catch { return null; }
@@ -101,8 +102,16 @@ export async function espnDay(league, day) {
   const isNear = Math.abs(startOfDay(new Date()) - startOfDay(day)) <= 86400e3;
   if (isNear && directOK !== false) {
     try {
-      const d = await direct(`/apis/site/v2/sports/${league.path}/scoreboard?dates=${ymd(addDays(day, -1))}-${ymd(addDays(day, 1))}&limit=300`);
-      return (d.events || []).map((e) => normEspnEvent(e, league)).filter((m) => sameLocalDay(m.start, day));
+      let evs;
+      if (!singleDay.has(league.key)) {
+        try { evs = (await direct(`/apis/site/v2/sports/${league.path}/scoreboard?dates=${ymd(addDays(day, -1))}-${ymd(addDays(day, 1))}&limit=300`)).events || []; }
+        catch (e) { if (/^HTTP 400/.test(e.message)) singleDay.add(league.key); else throw e; }
+      }
+      if (!evs) { // liga que só aceita um dia por vez: o dia local no Brasil cai no dia anterior e no mesmo dia nos EUA
+        const [a, b] = await Promise.all([direct(`/apis/site/v2/sports/${league.path}/scoreboard?dates=${ymd(addDays(day, -1))}`), direct(`/apis/site/v2/sports/${league.path}/scoreboard?dates=${ymd(day)}`)]);
+        evs = [...(a.events || []), ...(b.events || [])];
+      }
+      return evs.map((e) => normEspnEvent(e, league)).filter((m) => sameLocalDay(m.start, day));
     } catch { /* cai para os arquivos */ }
   }
   return (await leagueEvents(league)).filter((m) => sameLocalDay(m.start, day));
