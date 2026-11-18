@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>MeuPlacar</title>
+  <meta name="theme-color" content="#000000">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black">
+  <meta name="apple-mobile-web-app-title" content="MeuPlacar">
+  <link rel="manifest" href="./manifest.webmanifest">
+  <link rel="icon" href="./icons/icon-192.png">
+  <link rel="apple-touch-icon" href="./icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <header class="top">
+    <div class="brand"><span class="logo-dot"></span>Meu<b>Placar</b></div>
+    <button class="icon-btn" id="btn-refresh" aria-label="Atualizar">
+      <svg viewBox="0 0 24 24" width="20" height="20"><path fill="currentColor" d="M17.65 6.35A7.96 7.96 0 0 0 12 4a8 8 0 1 0 7.73 10h-2.08A6 6 0 1 1 12 6c1.66 0 3.14.69 4.22 1.78L13 11h7V4l-2.35 2.35z"/></svg>
+    </button>
+  </header>
+
+  <main id="view"></main>
+
+  <div id="sheet" class="sheet" hidden>
+    <div class="sheet-backdrop" data-close></div>
+    <div class="sheet-panel" role="dialog" aria-modal="true">
+      <div class="sheet-grip" data-close></div>
+      <div id="sheet-body"></div>
+    </div>
+  </div>
+
+  <nav class="tabbar">
+    <button data-tab="jogos" class="active">
+      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M12 2a10 10 0 1 0 0 20 10 10 0 0 0 0-20zm0 2c.9 0 1.77.15 2.58.42L12 6.3 9.42 4.42A8 8 0 0 1 12 4zm-4.6 1.46 3.6 2.6v3.18l-3.03 2.2-3.2-1.04-.05-.02A8 8 0 0 1 7.4 5.46zM12 20a7.96 7.96 0 0 1-4.66-1.5l.9-3.07 3.02-2.2h1.48l3.02 2.2.9 3.07A7.96 7.96 0 0 1 12 20zm7.28-5.6-3.25 1.06-3.03-2.2V10.1l3.6-2.62a8 8 0 0 1 2.68 6.92z"/></svg>
+      <span>Jogos</span></button>
+    <button data-tab="agenda">
+      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M7 2h2v2h6V2h2v2h3a1 1 0 0 1 1 1v15a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V5a1 1 0 0 1 1-1h3V2zm12 8H5v9h14v-9zM5 8h14V6H5v2zm2 4h4v4H7v-4z"/></svg>
+      <span>Agenda</span></button>
+    <button data-tab="tabelas">
+      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M3 4h18v2H3V4zm0 5h18v2H3V9zm0 5h12v2H3v-2zm0 5h8v2H3v-2z"/></svg>
+      <span>Tabelas</span></button>
+    <button data-tab="ajustes">
+      <svg viewBox="0 0 24 24"><path fill="currentColor" d="M19.4 13a7.5 7.5 0 0 0 0-2l2.1-1.6-2-3.5-2.5 1a7.4 7.4 0 0 0-1.7-1L15 3h-4l-.4 2.9a7.4 7.4 0 0 0-1.7 1l-2.5-1-2 3.5L6.6 11a7.5 7.5 0 0 0 0 2l-2.1 1.6 2 3.5 2.5-1c.5.4 1.1.8 1.7 1L11 21h4l.4-2.9c.6-.2 1.2-.6 1.7-1l2.5 1 2-3.5-2.2-1.6zM13 15.5a3.5 3.5 0 1 1 0-7 3.5 3.5 0 0 1 0 7z" transform="translate(-1 0)"/></svg>
+      <span>Ajustes</span></button>
+  </nav>
+
+  <div id="toast" class="toast" hidden></div>
+  <script type="module" src="./app.js"></script>
+</body>
+</html>
