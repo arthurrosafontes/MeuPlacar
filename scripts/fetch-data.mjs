@@ -362,6 +362,100 @@ async function main() {
     log(`✔ histórico: ${nh} times atualizados (faltam ${Math.max(0, due.length - nh)})`);
   }
 
+  // 5c) MATA-MATA das copas: fases do calendário da ESPN + jogos de cada fase eliminatória
+  {
+    const MON = { Jan: 0, Feb: 1, Mar: 2, Apr: 3, May: 4, Jun: 5, Jul: 6, Aug: 7, Sep: 8, Oct: 9, Nov: 10, Dec: 11 };
+    // "Aug 11-25" | "Apr 7-May 28" | "Nov 28" -> [inicio, fim] (usa o ano das datas da fase)
+    const parseDetail = (det, s0, e0) => {
+      const m = String(det || '').match(/^([A-Z][a-z]{2}) (\d{1,2})(?:-(?:([A-Z][a-z]{2}) )?(\d{1,2}))?$/);
+      if (!m || MON[m[1]] == null) return null;
+      const y0 = new Date(s0).getUTCFullYear();
+      const a = new Date(Date.UTC(y0, MON[m[1]], +m[2]));
+      if (a < addDays(new Date(s0), -2)) a.setUTCFullYear(y0 + 1);
+      const b = m[4] ? new Date(Date.UTC(a.getUTCFullYear(), MON[m[3] || m[1]], +m[4])) : new Date(a);
+      if (b < a) b.setUTCFullYear(b.getUTCFullYear() + 1);
+      return [addDays(a, -1), addDays(b, 1)];
+    };
+    const isKO = (label) => !/group|league phase|league stage|regular/i.test(label || '');
+    const slimKO = (e) => {
+      const c = e.competitions?.[0] || {};
+      const sc = (x) => (typeof x.score === 'object' ? x.score?.displayValue ?? x.score?.value : x.score);
+      return {
+        id: String(e.id), date: e.date, state: c.status?.type?.state || 'pre', clock: c.status?.type?.shortDetail || '',
+        leg: c.leg?.value || null, legs: c.series?.totalCompetitions || null, series: c.series?.title || '',
+        note: c.notes?.[0]?.text || c.notes?.[0]?.headline || '',
+        sWin: (c.series?.competitors || []).find((x) => x.winner)?.id || null, sDone: !!c.series?.completed,
+        t: (c.competitors || []).map((x) => ({ id: String(x.team?.id ?? x.id), home: x.homeAway === 'home', name: x.team?.displayName, short: x.team?.abbreviation, logo: x.team?.logo || x.team?.logos?.[0]?.href || '', score: sc(x), pen: x.shootoutScore ?? null, agg: x.aggregateScore ?? null, win: !!x.winner })),
+      };
+    };
+    const cups = espnLeagues.filter((l) => l.cup);
+    let budget = fullRun ? 70 : 16;
+    for (const lg of cups) {
+      try {
+        const sb = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard`, {}, 2);
+        const stages = (sb.leagues?.[0]?.calendar?.[0]?.entries || []).map((x) => ({ label: x.label, detail: x.detail, start: x.startDate, end: x.endDate }));
+        if (!stages.length) continue;
+        const cache = (await readOld(`bracket-days/${lg.key}.json`)) || {}; // { 'YYYYMMDD': { at, evs: [...] } }
+        const today = ymd(now);
+        const want = [];
+        stages.filter((st) => isKO(st.label)).forEach((st) => {
+          const win = parseDetail(st.detail, st.start, st.end) || [new Date(st.start), new Date(st.end)];
+          if (win[0] > addDays(now, DAYS_FWD)) return; // fase futura distante: ainda sem jogos
+          for (let d = new Date(win[0]); d <= win[1] && d <= addDays(now, DAYS_FWD); d = addDays(d, 1)) {
+            const k = ymd(d); const hit = cache[k];
+            const settled = k < ymd(addDays(now, -3)); // dias antigos não mudam mais
+            if (!hit || (!settled && Date.now() - hit.at > 50 * 60e3)) want.push(k);
+          }
+        });
+        const todo = [...new Set(want)].sort().reverse().slice(0, budget); // recentes primeiro
+        budget -= todo.length;
+        await pool(todo, 4, async (k) => {
+          const d = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard?dates=${k}&limit=100`, {}, 2).catch(() => null);
+          if (d) cache[k] = { at: Date.now(), evs: (d.events || []).map(slimKO) };
+        });
+        // jogos da janela principal (atualizados a cada 5 min) entram por cima
+        const fresh = new Map();
+        Object.values(cache).forEach((v) => v.evs.forEach((e) => fresh.set(e.id, e)));
+        // monta os confrontos por fase
+        const out = [];
+        for (const st of stages) {
+          const s0 = new Date(st.start), e0 = new Date(st.end);
+          const evs = [...fresh.values()].filter((e) => { const t = new Date(e.date); return t >= s0 && t < e0; });
+          if (!evs.length) { out.push({ label: st.label, detail: st.detail, ko: isKO(st.label), ties: [] }); continue; }
+          if (!isKO(st.label)) { out.push({ label: st.label, detail: st.detail, ko: false, ties: [] }); continue; }
+          const ties = new Map();
+          evs.sort((a, b) => new Date(a.date) - new Date(b.date)).forEach((e) => {
+            if (e.t.length < 2) return;
+            const key = e.t.map((x) => x.id).sort().join('-');
+            if (!ties.has(key)) ties.set(key, { a: e.t[0], b: e.t[1], legs: [] });
+            ties.get(key).legs.push(e);
+          });
+          out.push({ label: st.label, detail: st.detail, ko: true, ties: [...ties.values()].map((T) => {
+            const ids = [T.a.id, T.b.id]; const team = (id) => { const x = T.legs.flatMap((l) => l.t).find((y) => y.id === id); return { id, name: x?.name, short: x?.short, logo: x?.logo }; };
+            const agg = { [ids[0]]: 0, [ids[1]]: 0 }; let played = 0;
+            T.legs.forEach((l) => { if (l.state !== 'pre') { played++; l.t.forEach((x) => { agg[x.id] += Number(x.score) || 0; }); } });
+            const last = T.legs[T.legs.length - 1];
+            const total = last.legs || T.legs.length;
+            const done = last.state === 'post' && (last.sDone || T.legs.length >= total);
+            let winner = last.sWin ? String(last.sWin) : null;
+            if (!winner && done) {
+              const lt = last.t; const pen = lt.every((x) => x.pen != null) ? lt : null;
+              if (agg[ids[0]] !== agg[ids[1]]) winner = agg[ids[0]] > agg[ids[1]] ? ids[0] : ids[1];
+              else if (pen) winner = Number(pen[0].pen) > Number(pen[1].pen) ? pen[0].id : pen[1].id;
+              else winner = lt.find((x) => x.win)?.id || null;
+            }
+            const pens = last.t.every((x) => x.pen != null) ? Object.fromEntries(last.t.map((x) => [x.id, x.pen])) : null;
+            return { teams: [team(ids[0]), team(ids[1])], agg: played ? agg : null, pens, winner, done, live: T.legs.some((l) => l.state === 'in'), note: last.note,
+              legs: T.legs.map((l) => ({ id: l.id, date: l.date, state: l.state, clock: l.clock, leg: l.leg, home: l.t.find((x) => x.home)?.id || l.t[0].id, score: Object.fromEntries(l.t.map((x) => [x.id, x.score])) })) };
+          }) });
+        }
+        await write(`bracket-days/${lg.key}.json`, cache);
+        await write(`bracket/${lg.key}.json`, { stages: out, updated: now.toISOString() });
+        log(`✔ mata-mata ${lg.key}: ${out.filter((x) => x.ties.length).map((x) => `${x.label} (${x.ties.length})`).join(', ') || 'sem confrontos ainda'}${todo.length ? ` · ${todo.length} dias buscados` : ''}`);
+      } catch (e) { log(`  mata-mata ${lg.key}: ${e}`); }
+    }
+  }
+
   // 6) e-sports (PandaScore)
   if (TOKEN) {
     const H = { authorization: `Bearer ${TOKEN}` };
