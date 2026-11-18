@@ -152,10 +152,36 @@ async function main() {
   // 1) calendário/placar de cada liga (janela de dias)
   const range = `${ymd(addDays(now, -DAYS_BACK))}-${ymd(addDays(now, DAYS_FWD))}`;
   const allEvents = [];
+  // Algumas ligas (NBA, NFL, MLS, copas...) recusam intervalo de datas: nelas busca dia a dia.
+  const dayList = (from, to) => { const out = []; for (let d = addDays(now, from); d <= addDays(now, to); d = addDays(d, 1)) out.push(ymd(d)); return out; };
+  const singleState = (await readOld('single-day.json')) || {};
   await pool(espnLeagues, 4, async (lg) => {
     try {
-      const d = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard?dates=${range}&limit=1000`);
-      const evs = (d.events || []).map(slimEvent);
+      let evs;
+      if (!singleState[lg.key]) {
+        try {
+          const d = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard?dates=${range}&limit=1000`, {}, 2);
+          evs = (d.events || []).map(slimEvent);
+        } catch (e) {
+          if (!/HTTP 400/.test(String(e))) throw e;
+          singleState[lg.key] = true; log(`  ${lg.key}: usa busca dia a dia`);
+        }
+      }
+      if (!evs) {
+        // a cada execução: ontem até daqui a 2 dias; de hora em hora: janela inteira
+        const days = fullRun || !(await readOld(`espn/${lg.key}.json`)) ? dayList(-DAYS_BACK, DAYS_FWD) : dayList(-1, 2);
+        const fetched = new Map(); let okDays = 0;
+        await pool(days, 4, async (dstr) => {
+          const d = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard?dates=${dstr}&limit=300`, {}, 2).catch(() => null);
+          if (d) { okDays++; (d.events || []).forEach((e) => fetched.set(String(e.id), slimEvent(e))); }
+        });
+        if (!okDays) throw new Error('nenhum dia respondeu');
+        // mantém do arquivo antigo os jogos de dias que não foram buscados agora
+        const old = (await readOld(`espn/${lg.key}.json`)) || [];
+        const inWin = (e) => { const t = new Date(e.date); return t > addDays(now, -DAYS_BACK - 1) && t < addDays(now, DAYS_FWD + 1); };
+        old.forEach((e) => { if (!fetched.has(String(e.id)) && inWin(e) && !days.includes(ymd(new Date(new Date(e.date).getTime() - 5 * 3600e3)))) fetched.set(String(e.id), e); });
+        evs = [...fetched.values()].sort((a, b) => new Date(a.date) - new Date(b.date));
+      }
       await write(`espn/${lg.key}.json`, evs);
       meta.leagues[lg.key] = { ok: true, events: evs.length };
       evs.forEach((e) => allEvents.push({ lg, e }));
@@ -165,6 +191,7 @@ async function main() {
       log(`✘ ${lg.key}: ${e}`);
     }
   });
+  await write('single-day.json', singleState);
 
   // 1b) reserva: se a ESPN falhou numa liga, busca no football-data.org
   if (FD_TOKEN) {
