@@ -389,8 +389,10 @@ async function main() {
       };
     };
     const cups = espnLeagues.filter((l) => l.cup);
-    let budget = fullRun ? 70 : 16;
+    // cota dividida entre as copas (antes a primeira da lista podia usar tudo)
+    const perCup = fullRun ? 45 : 20;
     for (const lg of cups) {
+      let budget = perCup;
       try {
         const sb = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard`, {}, 2);
         const stages = (sb.leagues?.[0]?.calendar?.[0]?.entries || []).map((x) => ({ label: x.label, detail: x.detail, start: x.startDate, end: x.endDate }));
@@ -408,7 +410,6 @@ async function main() {
           }
         });
         const todo = [...new Set(want)].sort().reverse().slice(0, budget); // recentes primeiro
-        budget -= todo.length;
         await pool(todo, 4, async (k) => {
           const d = await get(`${ESPN}/apis/site/v2/sports/${lg.path}/scoreboard?dates=${k}&limit=100`, {}, 2).catch(() => null);
           if (d) cache[k] = { at: Date.now(), evs: (d.events || []).map(slimKO) };
@@ -450,7 +451,8 @@ async function main() {
           }) });
         }
         await write(`bracket-days/${lg.key}.json`, cache);
-        await write(`bracket/${lg.key}.json`, { stages: out, updated: now.toISOString() });
+        const pending = [...new Set(want)].length - todo.length;
+        await write(`bracket/${lg.key}.json`, { stages: out, updated: now.toISOString(), pending: Math.max(0, pending) });
         log(`✔ mata-mata ${lg.key}: ${out.filter((x) => x.ties.length).map((x) => `${x.label} (${x.ties.length})`).join(', ') || 'sem confrontos ainda'}${todo.length ? ` · ${todo.length} dias buscados` : ''}`);
       } catch (e) { log(`  mata-mata ${lg.key}: ${e}`); }
     }
