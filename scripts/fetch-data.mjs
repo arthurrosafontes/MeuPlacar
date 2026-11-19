@@ -447,17 +447,27 @@ async function main() {
             const last = T.legs[T.legs.length - 1];
             const total = last.legs || T.legs.length;
             const done = last.state === 'post' && (last.sDone || T.legs.length >= total);
-            let winner = last.sWin ? String(last.sWin) : null;
-            if (!winner && done) {
+            // vencedor: agregado > pênaltis > ESPN (a fase seguinte confirma depois)
+            let winner = null;
+            if (done) {
               const lt = last.t; const pen = lt.every((x) => x.pen != null) ? lt : null;
               if (agg[ids[0]] !== agg[ids[1]]) winner = agg[ids[0]] > agg[ids[1]] ? ids[0] : ids[1];
-              else if (pen) winner = Number(pen[0].pen) > Number(pen[1].pen) ? pen[0].id : pen[1].id;
-              else winner = lt.find((x) => x.win)?.id || null;
+              else if (pen && Number(pen[0].pen) !== Number(pen[1].pen)) winner = Number(pen[0].pen) > Number(pen[1].pen) ? pen[0].id : pen[1].id;
+              else winner = (last.sWin && ids.includes(String(last.sWin)) ? String(last.sWin) : null) || lt.find((x) => x.win)?.id || null;
             }
             const pens = last.t.every((x) => x.pen != null) ? Object.fromEntries(last.t.map((x) => [x.id, x.pen])) : null;
             return { teams: [team(ids[0]), team(ids[1])], agg: played ? agg : null, pens, winner, done, live: T.legs.some((l) => l.state === 'in'), note: last.note,
               legs: T.legs.map((l) => ({ id: l.id, date: l.date, state: l.state, clock: l.clock, leg: l.leg, home: l.t.find((x) => x.home)?.id || l.t[0].id, score: Object.fromEntries(l.t.map((x) => [x.id, x.score])) })) };
           }) });
+        }
+        // confirmação: quem aparece na fase eliminatória seguinte foi quem passou
+        const koStages = out.filter((x) => x.ko && x.ties.length);
+        for (let i = 0; i < koStages.length - 1; i++) {
+          const nextIds = new Set(koStages[i + 1].ties.flatMap((t) => t.teams.map((x) => x.id)));
+          koStages[i].ties.forEach((t) => {
+            const inNext = t.teams.filter((x) => nextIds.has(x.id));
+            if (inNext.length === 1) { t.winner = inNext[0].id; t.done = true; }
+          });
         }
         await write(`bracket-days/${lg.key}.json`, cache);
         const pending = [...new Set(want)].length - todo.length;
