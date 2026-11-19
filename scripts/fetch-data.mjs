@@ -419,9 +419,18 @@ async function main() {
         Object.values(cache).forEach((v) => v.evs.forEach((e) => fresh.set(e.id, e)));
         // monta os confrontos por fase
         const out = [];
+        // cada jogo vai para a fase que a própria ESPN informa (series.title); só sem isso usa a data
+        const nst = (x) => String(x || '').toLowerCase().replace(/round/g, 'rd').replace(/[^a-z0-9]/g, '');
+        const stageOf = (e) => {
+          const byTitle = e.series && stages.find((st) => nst(st.label) === nst(e.series));
+          if (byTitle) return byTitle;
+          const t = new Date(e.date);
+          return stages.find((st) => t >= new Date(st.start) && t < new Date(st.end));
+        };
+        const byStage = new Map();
+        [...fresh.values()].forEach((e) => { const st = stageOf(e); if (st) { if (!byStage.has(st)) byStage.set(st, []); byStage.get(st).push(e); } });
         for (const st of stages) {
-          const s0 = new Date(st.start), e0 = new Date(st.end);
-          const evs = [...fresh.values()].filter((e) => { const t = new Date(e.date); return t >= s0 && t < e0; });
+          const evs = byStage.get(st) || [];
           if (!evs.length) { out.push({ label: st.label, detail: st.detail, ko: isKO(st.label), ties: [] }); continue; }
           if (!isKO(st.label)) { out.push({ label: st.label, detail: st.detail, ko: false, ties: [] }); continue; }
           const ties = new Map();
