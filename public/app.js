@@ -760,7 +760,11 @@ function renderBracketInto(el, br, lg, hl = []) {
   const stages = (br?.stages || []).filter((s) => s.ko && s.ties.length);
   if (!stages.length) {
     const next = (br?.stages || []).find((s) => s.ko && !s.ties.length);
-    el.innerHTML = `<div class="empty"><b>Mata-mata ainda não começou</b>${next ? `Próxima fase: ${esc(stageName(next.label))}${next.detail ? ` (${esc(next.detail)})` : ''}.` : 'O robô monta os confrontos aos poucos (pode levar algumas horas na primeira vez).'}</div>`;
+    const now = Date.now();
+    const started = (br?.stages || []).some((s) => s.ko && s.detail && br.pending);
+    el.innerHTML = (br?.pending || started)
+      ? `<div class="empty"><b>Montando o mata-mata…</b>O robô está buscando os jogos desta temporada aos poucos. Faltam cerca de ${esc(br.pending || '')} dias de jogos.</div>`
+      : `<div class="empty"><b>Mata-mata ainda não começou</b>${next ? `Próxima fase: ${esc(stageName(next.label))}${next.detail ? ` (${esc(next.detail)})` : ''}.` : ''}</div>`;
     return;
   }
   // chave: a partir da fase com até 16 confrontos
